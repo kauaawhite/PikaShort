@@ -238,15 +238,15 @@ async function shortenMultipleAndRespond(chatId, links) {
     const block =
 `✨✨ Congratulations !  Your Url has been successfully shortened! 🚀 🔗
 
-🔗**Original url:*  
+*Original url:*  
 ${mdCode(p.original)}
 
-🌐**Shortened Url:** 
+*Shortened Url:*  
 ${mdCode(p.short)}`;
     fullMsg += block;
     if (idx < pairs.length - 1) fullMsg += "\n\n";
   });
-    
+
   // send
   await bot.sendMessage(chatId, fullMsg, { parse_mode: "MarkdownV2" });
 
@@ -518,4 +518,203 @@ bot.onText(/\/sendads/, (msg) => {
     if (!m.text || !m.from || m.from.id !== chatId) return;
     const adText = m.text;
     const users = getAllUsers();
-    // send with batc
+    // send with batching
+    sendInBatches(users, async (uid) => {
+      return bot.sendMessage(uid, adText, { parse_mode: "Markdown" });
+    }).then(({ delivered, failed }) => {
+      recordAdStat("manual-text", adText, delivered, failed);
+      bot.sendMessage(chatId, t("ads_sent", detectLang(adText)) + ` Delivered: ${delivered}, Failed: ${failed}`, { parse_mode: "Markdown" });
+    });
+    bot.removeListener("message", watcher);
+  };
+  bot.on("message", watcher);
+  setTimeout(() => bot.removeListener("message", watcher), 2 * 60 * 1000);
+});
+
+// /sendimgads
+bot.onText(/\/sendimgads/, (msg) => {
+  const chatId = msg.chat.id;
+  if (!isAdmin(chatId)) return;
+  bot.sendMessage(chatId, "📸 Send the image (photo) you want to broadcast with optional caption.");
+
+  const watcher = (m) => {
+    if (!m.from || m.from.id !== chatId || !m.photo) return;
+    const fileId = m.photo[m.photo.length - 1].file_id;
+    const caption = m.caption || "";
+    const users = getAllUsers();
+    sendInBatches(users, async (uid) => bot.sendPhoto(uid, fileId, { caption, parse_mode: "Markdown" }))
+      .then(({ delivered, failed }) => {
+        recordAdStat("image", caption, delivered, failed);
+        bot.sendMessage(chatId, `${t("ads_sent","en")} Delivered: ${delivered}, Failed: ${failed}`);
+      });
+    bot.removeListener("message", watcher);
+  };
+  bot.on("message", watcher);
+  setTimeout(() => bot.removeListener("message", watcher), 2 * 60 * 1000);
+});
+
+// /sendvideoads
+bot.onText(/\/sendvideoads/, (msg) => {
+  const chatId = msg.chat.id;
+  if (!isAdmin(chatId)) return;
+  bot.sendMessage(chatId, "🎬 Send the video you want to broadcast with optional caption.");
+
+  const watcher = (m) => {
+    if (!m.from || m.from.id !== chatId || !m.video) return;
+    const fileId = m.video.file_id;
+    const caption = m.caption || "";
+    const users = getAllUsers();
+    sendInBatches(users, async (uid) => bot.sendVideo(uid, fileId, { caption, parse_mode: "Markdown" }))
+      .then(({ delivered, failed }) => {
+        recordAdStat("video", caption, delivered, failed);
+        bot.sendMessage(chatId, `${t("ads_sent","en")} Delivered: ${delivered}, Failed: ${failed}`);
+      });
+    bot.removeListener("message", watcher);
+  };
+  bot.on("message", watcher);
+  setTimeout(() => bot.removeListener("message", watcher), 2 * 60 * 1000);
+});
+
+// /adsstats - admin only
+bot.onText(/\/adsstats/, (msg) => {
+  const chatId = msg.chat.id;
+  if (!isAdmin(chatId)) return;
+  const db = readDB();
+  const stats = db.adStats || { totalDelivered: 0, totalFailed: 0, history: [] };
+  let out = `📊 Ads Stats\nTotal Delivered: ${stats.totalDelivered}\nTotal Failed: ${stats.totalFailed}\nRecent:\n`;
+  (stats.history || []).slice(0, 10).forEach(h => {
+    out += `${h.timestamp} | ${h.type} | delivered:${h.delivered} failed:${h.failed}\n`;
+  });
+  bot.sendMessage(chatId, out);
+});
+
+// Premium controls: /premiumadd <id> /premiumremove <id> /premiumlist
+bot.onText(/\/premiumadd (.+)/, (msg, match) => {
+  const chatId = msg.chat.id;
+  if (!isAdmin(chatId)) return;
+  const id = (match && match[1]) ? String(match[1].trim()) : null;
+  if (!id) return bot.sendMessage(chatId, "Usage: /premiumadd <chatId>");
+  const db = readDB();
+  db.premium = db.premium || [];
+  if (!db.premium.includes(id)) db.premium.push(id);
+  writeDB(db);
+  bot.sendMessage(chatId, `✅ Added ${id} to premium list.`);
+});
+bot.onText(/\/premiumremove (.+)/, (msg, match) => {
+  const chatId = msg.chat.id;
+  if (!isAdmin(chatId)) return;
+  const id = (match && match[1]) ? String(match[1].trim()) : null;
+  if (!id) return bot.sendMessage(chatId, "Usage: /premiumremove <chatId>");
+  const db = readDB();
+  db.premium = (db.premium || []).filter(x => x !== id);
+  writeDB(db);
+  bot.sendMessage(chatId, `✅ Removed ${id} from premium list.`);
+});
+bot.onText(/\/premiumlist/, (msg) => {
+  const chatId = msg.chat.id;
+  if (!isAdmin(chatId)) return;
+  const db = readDB();
+  bot.sendMessage(chatId, `Premium users:\n${(db.premium || []).join("\n") || "(none)"}`);
+});
+
+// /setheader /setfooter /toggleheader from V13 preserved
+bot.onText(/\/setheader (.+)/, (msg, match) => {
+  const chatId = msg.chat.id;
+  if (!isAdmin(chatId)) return;
+  const txt = (match && match[1]) ? match[1].trim() : "";
+  if (!txt) return bot.sendMessage(chatId, "Usage: /setheader <text>");
+  const db = readDB();
+  db.headerText = txt;
+  writeDB(db);
+  bot.sendMessage(chatId, "✅ Header text updated.");
+});
+bot.onText(/\/setfooter (.+)/, (msg, match) => {
+  const chatId = msg.chat.id;
+  if (!isAdmin(chatId)) return;
+  const txt = (match && match[1]) ? match[1].trim() : "";
+  if (!txt) return bot.sendMessage(chatId, "Usage: /setfooter <text>");
+  const db = readDB();
+  db.footerText = txt;
+  writeDB(db);
+  bot.sendMessage(chatId, "✅ Footer text updated.");
+});
+bot.onText(/\/toggleheader/, (msg) => {
+  const chatId = msg.chat.id;
+  if (!isAdmin(chatId)) return;
+  headerFooterEnabled = !headerFooterEnabled;
+  bot.sendMessage(chatId, `Header/Footer are now ${headerFooterEnabled ? "ENABLED" : "DISABLED"}.`);
+});
+
+// /status - admin shows counts & config
+bot.onText(/\/status/, (msg) => {
+  const chatId = msg.chat.id;
+  if (!isAdmin(chatId)) return;
+  const db = readDB();
+  const usersCount = Object.keys(db.lastActive || {}).length;
+  const adminsCount = (db.admins || []).length;
+  const schedule = db.schedule || { enabled: false };
+  bot.sendMessage(chatId, `📊 Status\nUsers: ${usersCount}\nAdmins: ${adminsCount}\nSchedule: ${schedule.enabled ? "ON " + schedule.time : "OFF"}\nAutosave backups every 6 hours.\nBatch size: ${BATCH_SIZE}`, { parse_mode: "Markdown" });
+});
+
+// Message handler: shorten links (no echo)
+bot.on("message", async (msg) => {
+  const chatId = msg.chat.id;
+  if (!msg.text && !msg.caption) return;
+  const text = msg.text || msg.caption;
+
+  // ignore commands handled above but mark last active for others
+  if (/^\/(start|api|admin|sendads|sendimgads|sendvideoads|setads|setheader|setfooter|toggleheader|status|premiumadd|premiumremove|premiumlist|adsstats|setautoschedule|disableautoschedule|setads)/i.test(text.trim())) {
+    if (!/^\/(sendads|sendimgads|sendvideoads)/i.test(text.trim())) saveLastActive(chatId);
+    return;
+  }
+
+  saveLastActive(chatId);
+
+  const links = extractLinks(text);
+  if (!links || links.length === 0) return;
+
+  try {
+    const pairs = await shortenMultipleAndRespond(chatId, links);
+    // pairs returned - nothing else to do
+  } catch (e) {
+    console.error("shorten handler error:", e?.message || e);
+  }
+});
+
+// ----------------- Utility: getAllUsers returns array of ids (strings) ----------------
+function getAllUsers() {
+  const db = readDB();
+  return Object.keys(db.lastActive || {});
+}
+
+// ---------------- INACTIVE CHECKER ----------------
+setInterval(() => {
+  const db = readDB();
+  const now = Date.now();
+  const limit = INACTIVE_DAYS * 24 * 60 * 60 * 1000;
+  for (const uid of Object.keys(db.lastActive || {})) {
+    try {
+      if (now - db.lastActive[uid] >= limit) {
+        // send using localized start language detection by nothing (use English default)
+        bot.sendMessage(uid, inactiveMessage).catch(() => {});
+        db.lastActive[uid] = now;
+      }
+    } catch (e) {
+      console.error("inactive send error", uid, e?.message || e);
+    }
+  }
+  writeDB(db);
+}, INACTIVE_CHECK_INTERVAL_HOURS * 60 * 60 * 1000);
+
+// ---------------- STARTUP LOG ----------------
+console.log("Bot V14 started. All features enabled (scheduled ads, batching, dashboard, backups, premium, ad-stats, multilanguage).");
+
+// ---------------- HELPER: graceful backup on exit ----------------
+process.on("SIGINT", () => {
+  try { backupDB(); } catch {}
+  process.exit();
+});
+process.on("SIGTERM", () => {
+  try { backupDB(); } catch {}
+  process.exit();
+});
